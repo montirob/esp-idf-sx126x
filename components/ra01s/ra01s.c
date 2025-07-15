@@ -73,15 +73,29 @@ void LoRaInit(void)
 	txActive = false;
 	debugPrint = false;
 
-	gpio_reset_pin(SX126x_SPI_SELECT);
-	gpio_set_direction(SX126x_SPI_SELECT, GPIO_MODE_OUTPUT);
-	gpio_set_level(SX126x_SPI_SELECT, 1);
+	gpio_config_t io_conf = {
+		.pin_bit_mask = (1ULL << SX126x_SPI_SELECT),
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_up_en = GPIO_PULLUP_DISABLE,
+		.pull_down_en = GPIO_PULLDOWN_DISABLE,
+		.intr_type = GPIO_INTR_DISABLE};
+	gpio_config(&io_conf);
 
-	gpio_reset_pin(SX126x_RESET);
-	gpio_set_direction(SX126x_RESET, GPIO_MODE_OUTPUT);
-	
-	gpio_reset_pin(SX126x_BUSY);
-	gpio_set_direction(SX126x_BUSY, GPIO_MODE_INPUT);
+	gpio_config_t io_conf2 = {
+		.pin_bit_mask = (1ULL << SX126x_RESET),
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_up_en = GPIO_PULLUP_DISABLE,
+		.pull_down_en = GPIO_PULLDOWN_DISABLE,
+		.intr_type = GPIO_INTR_DISABLE};
+	gpio_config(&io_conf2);
+
+	gpio_config_t io_conf3 = {
+		.pin_bit_mask = (1ULL << SX126x_BUSY),
+		.mode = GPIO_MODE_INPUT,
+		.pull_up_en = GPIO_PULLUP_DISABLE,
+		.pull_down_en = GPIO_PULLDOWN_DISABLE,
+		.intr_type = GPIO_INTR_DISABLE};
+	gpio_config(&io_conf3);
 
 	if (SX126x_TXEN != -1) {
 		gpio_reset_pin(SX126x_TXEN);
@@ -179,6 +193,21 @@ int16_t LoRaBegin(uint32_t frequencyInHz, int8_t txPowerInDbm, float tcxoVoltage
 		return ERR_INVALID_MODE;
 	}
 
+	wk[0] = 0x14;
+    wk[1] = 0x24;
+  	WriteRegister(SX126X_REG_LORA_SYNC_WORD_MSB, &wk[0], 2); // 0x0736
+
+	ReadRegister(SX126X_REG_LORA_SYNC_WORD_MSB, wk, 2); // 0x0740
+	syncWord = (wk[0] << 8) + wk[1];
+	ESP_LOGI(TAG, "new syncWord=0x%x", syncWord);
+	if (syncWord != SX126X_SYNC_WORD_PUBLIC && syncWord != SX126X_SYNC_WORD_PRIVATE) {
+		ESP_LOGE(TAG, "SX126x error, maybe no SPI connection");
+		return ERR_INVALID_MODE;
+	}
+
+
+
+
 	ESP_LOGI(TAG, "SX126x installed");
 	SetStandby(SX126X_STANDBY_RC);
 
@@ -215,9 +244,13 @@ int16_t LoRaBegin(uint32_t frequencyInHz, int8_t txPowerInDbm, float tcxoVoltage
 	SetPaConfig(0x04, 0x07, 0x00, 0x01); // PA Optimal Settings +22 dBm
 #endif
 	SetPaConfig(0x04, 0x07, 0x00, 0x01); // PA Optimal Settings +22 dBm
+		vTaskDelay(10);
 	SetOvercurrentProtection(60.0);  // current max 60mA for the whole device
+		vTaskDelay(10);
 	SetPowerConfig(txPowerInDbm, SX126X_PA_RAMP_200U); //0 fuer Empfaenger
+		vTaskDelay(10);
 	SetRfFrequency(frequencyInHz);
+		vTaskDelay(10);
 	return ERR_NONE;
 }
 
@@ -233,7 +266,7 @@ void FixInvertedIQ(uint8_t iqConfig)
 	// read current IQ configuration
 	uint8_t iqConfigCurrent = 0;
 	ReadRegister(SX126X_REG_IQ_POLARITY_SETUP, &iqConfigCurrent, 1); // 0x0736
-
+	vTaskDelay(10);
 	// set correct IQ configuration
 	//if(iqConfig == SX126X_LORA_IQ_STANDARD) {
 	if(iqConfig == SX126X_LORA_IQ_INVERTED) {
@@ -244,16 +277,21 @@ void FixInvertedIQ(uint8_t iqConfig)
 
 	// update with the new value
 	WriteRegister(SX126X_REG_IQ_POLARITY_SETUP, &iqConfigCurrent, 1); // 0x0736
+		vTaskDelay(10);
 }
 
 
 void LoRaConfig(uint8_t spreadingFactor, uint8_t bandwidth, uint8_t codingRate, uint16_t preambleLength, uint8_t payloadLen, bool crcOn, bool invertIrq) 
 {
 	SetStopRxTimerOnPreambleDetect(false);
+	vTaskDelay(10);
 	SetLoRaSymbNumTimeout(0); 
+	vTaskDelay(10);
 	SetPacketType(SX126X_PACKET_TYPE_LORA); // SX126x.ModulationParams.PacketType : MODEM_LORA
+	vTaskDelay(10);
 	uint8_t ldro = 0; // LowDataRateOptimize OFF
 	SetModulationParams(spreadingFactor, bandwidth, codingRate, ldro);
+	vTaskDelay(10);
 	
 	PacketParams[0] = (preambleLength >> 8) & 0xFF;
 	PacketParams[1] = preambleLength;
@@ -282,14 +320,14 @@ void LoRaConfig(uint8_t spreadingFactor, uint8_t bandwidth, uint8_t codingRate, 
 	FixInvertedIQ(PacketParams[5]);
 
 	WriteCommand(SX126X_CMD_SET_PACKET_PARAMS, PacketParams, 6); // 0x8C
-
+	vTaskDelay(10);
 	// Do not use DIO interruptst
 	SetDioIrqParams(SX126X_IRQ_ALL, //all interrupts enabled
 		SX126X_IRQ_NONE, //interrupts on DIO1
 		SX126X_IRQ_NONE, //interrupts on DIO2
 		SX126X_IRQ_NONE //interrupts on DIO3
 	);
-
+	vTaskDelay(10);
 	// Receive state no receive timeoout
 	SetRx(0xFFFFFF);
 }
@@ -306,10 +344,10 @@ uint8_t LoRaReceive(uint8_t *pData, int16_t len)
 	uint8_t rxLen = 0;
 	uint16_t irqRegs = GetIrqStatus();
 	//uint8_t status = GetStatus();
-	
 	if( irqRegs & SX126X_IRQ_RX_DONE )
 	{
 		//ClearIrqStatus(SX126X_IRQ_RX_DONE);
+		ESP_LOGI(TAG, "ricevuto qualcosa");
 		ClearIrqStatus(SX126X_IRQ_ALL);
 		rxLen = ReadBuffer(pData, len);
 	}
@@ -498,6 +536,10 @@ void SetRfFrequency(uint32_t frequency)
 	uint8_t buf[4];
 	uint32_t freq = 0;
 
+	if ( debugPrint )
+  	{
+     	printf( "CalibrateImage for freq %ld \n", frequency );
+  	}
 	CalibrateImage(frequency);
 
 	freq = (uint32_t)((double)frequency / (double)FREQ_STEP);
@@ -505,7 +547,15 @@ void SetRfFrequency(uint32_t frequency)
 	buf[1] = (uint8_t)((freq >> 16) & 0xFF);
 	buf[2] = (uint8_t)((freq >> 8) & 0xFF);
 	buf[3] = (uint8_t)(freq & 0xFF);
+
+	if ( debugPrint )
+	{
+		printf( "SX126X_CMD_SET_RF_FREQUENCY for freq %ld \n", frequency );
+	}
 	WriteCommand(SX126X_CMD_SET_RF_FREQUENCY, buf, 4); // 0x86
+
+	ESP_LOGI("LoRa", "SX126X_CMD_SET_RF_FREQUENCY: %.2x,%.2x,%.2x,%.2x", buf[0], buf[0],  buf[0],buf[0]);
+
 }
 
 
@@ -719,6 +769,9 @@ void SetRx(uint32_t timeout)
 	if ((GetStatus() & 0x70) != 0x50) {
 		ESP_LOGE(TAG, "SetRx Illegal Status");
 		LoRaError(ERR_INVALID_SETRX_STATE);
+	}
+	else{
+		ESP_LOGI(TAG, "SetRx OK");
 	}
 }
 
@@ -969,14 +1022,25 @@ uint8_t WriteCommand2(uint8_t cmd, uint8_t* data, uint8_t numBytes) {
 	WaitForIdle(BUSY_WAIT, "start WriteCommand2", true);
 
 	if(debugPrint) {
-		ESP_LOGI(TAG, "WriteCommand: CMD=0x%02x", cmd);
+		printf("WriteCommand:  CMD=0x%02x\n",cmd);
+    	printf(" DataOut: ");
 	}
 
 	// start transfer
 	uint8_t buf[16];
 	buf[0] = cmd;
 	memcpy(&buf[1], data, numBytes);
+
+	for (uint32_t i = 0; i<numBytes; i++)
+	{
+		if ( debugPrint )
+      {
+         printf( "data[%ld]=%02x\n ", i, buf[i+1] );
+      }
+	}
 	spi_read_byte(buf, buf, numBytes + 1);
+
+
 
 	uint8_t status = 0;
 	uint8_t cmd_status = buf[1] & 0xe;
